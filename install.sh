@@ -14,9 +14,14 @@ info() { echo -e "${CYAN}[i]${NC} $1"; }
 
 ARCH="$(uname -m)"
 KVER="$(uname -r)"
+# CN-008: validate KVER format before using it in package install commands
+[[ "$KVER" =~ ^[0-9]+\.[0-9]+\.[0-9a-zA-Z._-]+$ ]] || { echo -e "\033[0;31m[✗]\033[0m KVER inválido: $KVER"; exit 1; }
+# CN-024: validate architecture is x86_64 before proceeding
+[ "$ARCH" = "x86_64" ] || { echo -e "\033[0;31m[✗]\033[0m Arquitectura no soportada: $ARCH. Solo x86_64."; exit 1; }
 DISTRO=""
 DRIVER_REPO="https://github.com/hmtheboy154/mt7902.git"
-DRIVER_DIR="/tmp/mt7902-src"
+# CN-002: use mktemp for unpredictable temp dirs — prevents TOCTOU/symlink attacks as root
+DRIVER_DIR=$(mktemp -d -t mt7902-src.XXXXXX)
 MODNAME="mt7902e"
 BLACKLIST_FILE="/etc/modprobe.d/mt7902-blacklist.conf"
 LOAD_FILE="/etc/modules-load.d/mt7902e.conf"
@@ -25,14 +30,17 @@ LOAD_FILE="/etc/modules-load.d/mt7902e.conf"
 BT_DRIVER_REPO="https://github.com/hmtheboy154/mt7902"
 BT_BRANCH="bluetooth_backport"
 BT_MODNAME="btusb_mt7902"
-BT_DIR="/tmp/mt7902-bt-src"
+# CN-002: use mktemp for unpredictable temp dirs — prevents TOCTOU/symlink attacks as root
+BT_DIR=$(mktemp -d -t mt7902-bt.XXXXXX)
+trap 'rm -rf "$DRIVER_DIR" "$BT_DIR"' EXIT
 BLACKLIST_BT_FILE="/etc/modprobe.d/mt7902-bt-blacklist.conf"
 INSTALL_BT=1  # default: instalar BT
 
 detect_distro() {
   if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    DISTRO="$ID"
+    # CN-003: parse without dot-source to avoid executing arbitrary code as root
+    DISTRO=$(grep -E '^ID=' /etc/os-release | head -1 | cut -d= -f2 | tr -d '"')
+    VERSION_ID=$(grep -E '^VERSION_ID=' /etc/os-release | head -1 | cut -d= -f2 | tr -d '"' || true)
   elif command -v lsb_release &>/dev/null; then
     DISTRO="$(lsb_release -is)"
   else
@@ -71,16 +79,24 @@ check_secureboot() {
 }
 
 install_deps_fedora() {
-  dnf install -y git gcc make kernel-devel-"$KVER" patch 2>&1 | tail -1
+  # CN-027: drop | tail -1 so pipefail catches errors
+  dnf install -y git gcc make kernel-devel-"$KVER" patch 2>/dev/null \
+    || err "Falló dnf install de dependencias"
 }
 install_deps_rhel() {
-  dnf install -y git gcc make kernel-devel-"$KVER" patch 2>&1 | tail -1
+  # CN-027: drop | tail -1 so pipefail catches errors
+  dnf install -y git gcc make kernel-devel-"$KVER" patch 2>/dev/null \
+    || err "Falló dnf install de dependencias"
 }
 install_deps_ubuntu() {
-  apt-get update -qq && apt-get install -y git gcc make linux-headers-"$KVER" patch 2>&1 | tail -1
+  # CN-027: drop | tail -1 so pipefail catches errors
+  apt-get update -qq && apt-get install -y git gcc make linux-headers-"$KVER" patch 2>/dev/null \
+    || err "Falló apt-get install de dependencias"
 }
 install_deps_arch() {
-  pacman -Sy --noconfirm git gcc make linux-headers patch 2>&1 | tail -1
+  # CN-027: drop | tail -1 so pipefail catches errors
+  pacman -Sy --noconfirm git gcc make linux-headers patch 2>/dev/null \
+    || err "Falló pacman install de dependencias"
 }
 
 install_deps() {
@@ -98,15 +114,20 @@ install_deps() {
 download_driver() {
   info "Descargando driver MT7902..."
   rm -rf "$DRIVER_DIR"
-  git clone --depth=1 "$DRIVER_REPO" "$DRIVER_DIR" 2>&1 | tail -1
+  # CN-027: drop | tail -1 so pipefail catches errors; CN-001(partial): print commit SHA
+  git clone --depth=1 "$DRIVER_REPO" "$DRIVER_DIR" 2>/dev/null \
+    || { err "Falló git clone de $DRIVER_REPO"; }
+  DRIVER_COMMIT=$(git -C "$DRIVER_DIR" rev-parse HEAD)
+  warn "Commit del driver clonado: $DRIVER_COMMIT"
+  warn "Verificá en https://github.com/hmtheboy154/mt7902/commit/$DRIVER_COMMIT que este commit es de confianza."
   log "Driver descargado"
 }
 
 compile_driver() {
   info "Compilando driver (esto puede tomar minutos)..."
-  cd "$DRIVER_DIR"
-  make -j"$(nproc)" 2>&1 | tail -1
-  if [ ! -f mt7902e.ko ]; then
+  # CN-009: subshell preserves CWD; CN-027: drop | tail -1 so pipefail works
+  ( cd "$DRIVER_DIR" && make -j"$(nproc)" ) || err "Falló la compilación del driver. Ejecutá 'make' manualmente en $DRIVER_DIR para ver el error."
+  if [ ! -f "$DRIVER_DIR/mt7902e.ko" ]; then
     err "Compilación falló — revisá los errores arriba"
   fi
   log "Compilación exitosa"
@@ -152,15 +173,19 @@ setup_autoload() {
 
 rebuild_initramfs() {
   info "Reconstruyendo initramfs..."
+  # CN-027: drop | tail -1 so pipefail catches errors
   if command -v dracut &>/dev/null; then
     dracut -f --add-drivers "$MODNAME" \
       --include "$BLACKLIST_FILE" "$BLACKLIST_FILE" \
       --include "$LOAD_FILE" "$LOAD_FILE" \
-      /boot/initramfs-"$KVER".img "$KVER" 2>&1 | tail -1
+      /boot/initramfs-"$KVER".img "$KVER" 2>/dev/null \
+      || err "Falló dracut al reconstruir initramfs"
   elif command -v update-initramfs &>/dev/null; then
-    update-initramfs -u -k "$KVER" 2>&1 | tail -1
+    update-initramfs -u -k "$KVER" 2>/dev/null \
+      || err "Falló update-initramfs"
   elif command -v mkinitcpio &>/dev/null; then
-    mkinitcpio -g /boot/initramfs-"$KVER".img 2>&1 | tail -1
+    mkinitcpio -g /boot/initramfs-"$KVER".img 2>/dev/null \
+      || err "Falló mkinitcpio"
   else
     warn "No se pudo reconstruir initramfs automáticamente. Hacelo manual."
   fi
@@ -186,9 +211,13 @@ MAKE="make -j\$(nproc) KVER=\$kernelver"
 CLEAN="make clean KVER=\$kernelver"
 BUILT_MODULE_LOCATION="."
 EOF
-  dkms add -m "$MODNAME" -v 1.0 2>&1 | tail -1
-  dkms build -m "$MODNAME" -v 1.0 2>&1 | tail -1
-  dkms install -m "$MODNAME" -v 1.0 2>&1 | tail -1
+  # CN-027: drop | tail -1 so pipefail catches errors in dkms operations
+  dkms add -m "$MODNAME" -v 1.0 2>/dev/null \
+    || err "Falló dkms add"
+  dkms build -m "$MODNAME" -v 1.0 2>/dev/null \
+    || err "Falló dkms build. Revisá los logs en /var/lib/dkms/$MODNAME/1.0/build/"
+  dkms install -m "$MODNAME" -v 1.0 2>/dev/null \
+    || err "Falló dkms install"
   log "DKMS registrado: $MODNAME/1.0"
 }
 
@@ -242,8 +271,17 @@ install_bluetooth() {
   info "=== Instalando driver Bluetooth MT7902 ==="
 
   # Verificar que el chip BT esté presente
-  if ! lsusb 2>/dev/null | grep -qi "13d3:3579\|13d3:3580" && \
-     ! find /sys/bus/usb/devices -name "idVendor" -exec grep -l "13d3" {} \; 2>/dev/null | head -1 | xargs -I{} sh -c 'dir=$(dirname {}); grep -q "3579\|3580" $dir/idProduct 2>/dev/null' ; then
+  # CN-007: safe while-read loop instead of xargs -I{} sh -c to prevent path injection
+  local BT_FOUND=0
+  if lsusb 2>/dev/null | grep -qi "13d3:3579\|13d3:3580"; then
+    BT_FOUND=1
+  else
+    while IFS= read -r -d '' vendorfile; do
+      dir=$(dirname "$vendorfile")
+      grep -q "3579\|3580" "$dir/idProduct" 2>/dev/null && { BT_FOUND=1; break; }
+    done < <(find /sys/bus/usb/devices -name "idVendor" -print0 2>/dev/null)
+  fi
+  if [ "$BT_FOUND" -eq 0 ]; then
     warn "No se detectó interfaz USB Bluetooth MT7902 (13d3:3579). Saltando BT."
     return
   fi
@@ -260,22 +298,28 @@ install_bluetooth() {
   fi
 
   # Clonar branch bluetooth_backport
-  rm -rf "$BT_DIR"
-  git clone --depth=1 --branch "$BT_BRANCH" "$BT_DRIVER_REPO" "$BT_DIR" || {
+  # CN-002: BT_DIR already created by mktemp; clear it before use
+  rm -rf "${BT_DIR:?}"/*
+  # CN-027: git clone without | tail -1 so pipefail catches errors
+  git clone --depth=1 --branch "$BT_BRANCH" "$BT_DRIVER_REPO" "$BT_DIR" 2>/dev/null || {
     warn "No se pudo clonar bluetooth_backport. Intentando fetch directo..."
-    mkdir -p "$BT_DIR"
-    cd "$BT_DIR"
-    git init
-    git fetch "$BT_DRIVER_REPO" "refs/remotes/origin/$BT_BRANCH:$BT_BRANCH" --depth=1 || {
+    # CN-009: subshell preserves CWD for the git init fallback
+    ( cd "$BT_DIR" && git init \
+      && git fetch "$BT_DRIVER_REPO" "refs/remotes/origin/$BT_BRANCH:$BT_BRANCH" --depth=1 \
+      && git checkout "$BT_BRANCH" ) || {
       warn "No se pudo obtener el branch BT. Saltando instalación de Bluetooth."
       return
     }
-    git checkout "$BT_BRANCH"
+  }
+  # CN-001(partial): print BT commit SHA for manual verification
+  BT_COMMIT=$(git -C "$BT_DIR" rev-parse HEAD 2>/dev/null || true)
+  [ -n "$BT_COMMIT" ] && {
+    warn "Commit del driver BT clonado: $BT_COMMIT"
+    warn "Verificá en https://github.com/hmtheboy154/mt7902/commit/$BT_COMMIT que este commit es de confianza."
   }
 
-  # Compilar
-  cd "$BT_DIR"
-  make -j"$(nproc)" KVER="$KVER" || {
+  # Compilar — CN-009: subshell preserves CWD; CN-027: drop | tail -1 so pipefail works
+  ( cd "$BT_DIR" && make -j"$(nproc)" KVER="$KVER" ) || {
     warn "Fallo al compilar driver BT. Saltando instalación de Bluetooth."
     return
   }
@@ -326,14 +370,12 @@ EOF
     fi
   } || warn "Módulo BT cargado pero requiere reinicio"
 
-  # Limpiar
-  rm -rf "$BT_DIR"
   log "=== Bluetooth instalado ==="
 }
 
 cleanup() {
-  rm -rf "$DRIVER_DIR"
-  log "Archivos temporales eliminados"
+  # CN-002: DRIVER_DIR and BT_DIR are cleaned up by the trap registered at startup
+  log "Archivos temporales serán eliminados al salir (trap EXIT)"
 }
 
 usage() {
