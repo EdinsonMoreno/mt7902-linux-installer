@@ -13,7 +13,7 @@
 
 El **MediaTek MT7902** (PCI ID `14c3:7902`) es un chip WiFi 6E usado en muchos laptops modernos (ASUS Vivobook, etc.) que **no tiene soporte estable en Linux mainline** hasta kernel 7.1.
 
-MediaTek envió los parches oficiales al mailing list de Linux en Febrero 2026 (serie de 11 patches), pero fueron aceptados para **kernel 7.1+**. Mientras tanto, este instalador usa un backport comunitario mantenido por [hmtheboy154](https://github.com/hmtheboy154/mt7902) que adapta esos mismos parches para kernels 6.6+.
+MediaTek envió los parches oficiales al mailing list de Linux en Febrero 2026 (serie de 11 patches), pero fueron aceptados para **kernel 7.1+**. Mientras tanto, este instalador usa el fork [EdinsonMoreno/mt7902-fork](https://github.com/EdinsonMoreno/mt7902-fork) (rama `backport`), que parte del backport comunitario de [hmtheboy154](https://github.com/hmtheboy154/mt7902) e incorpora fixes adicionales: corrección del txpower reportado como 0 dBm en sistemas con tablas ACPI SAR inválidas, fix de asociación de estación fallida con error -22, y compatibilidad de build para kernels >= 6.17.
 
 ### Hardware afectado
 
@@ -26,7 +26,7 @@ Dispositivos que usan este chip:
 1. Detecta tu distribución y kernel
 2. Verifica presencia del hardware MT7902 (PCI `14c3:7902`)
 3. Instala dependencias de compilación
-4. Descarga el driver del repositorio del fabricante
+4. Descarga el driver desde [EdinsonMoreno/mt7902-fork](https://github.com/EdinsonMoreno/mt7902-fork) (rama `backport`, incluye fixes adicionales)
 5. Compila el módulo `mt7902e.ko`
 6. Blackliste los módulos `mt76` in-tree que causan conflicto de símbolos
 7. Configura carga automática del módulo al boot
@@ -139,6 +139,35 @@ Para Bluetooth, el driver in-tree `btusb` se engancha al chip por alias genéric
 El soporte mainline completo (incluyendo 2x2 MIMO y 160MHz) está proyectado para kernel 7.1+.
 Cuando estés en kernel 7.1+, podés desinstalar este driver y usar el soporte nativo.
 
+## Diagnóstico y logs
+
+El instalador genera un log completo con toda la salida en:
+
+```
+/tmp/mt7902-install-YYYYMMDD-HHMMSS.log
+```
+
+Si la instalación falla, el mensaje de error incluye la ruta del log y el comando de diagnóstico específico para el problema. Para ver los últimos errores:
+
+```bash
+tail -50 /tmp/mt7902-install-*.log
+```
+
+Si el módulo no se carga automáticamente tras la instalación:
+
+```bash
+sudo modprobe mt7902e         # Cargar manualmente
+sudo dkms status              # Verificar registro DKMS
+iw dev                        # Verificar interfaz WiFi
+```
+
+Si DKMS falla al recompilar en un nuevo kernel:
+
+```bash
+sudo dkms build mt7902e/1.0 --kernelver $(uname -r)
+cat /var/lib/dkms/mt7902e/1.0/build/make.log | tail -30
+```
+
 ## Desinstalación
 
 ```bash
@@ -150,6 +179,7 @@ Esto elimina tanto el driver WiFi como el driver Bluetooth y sus respectivos bla
 ## Créditos
 
 - **[hmtheboy154](https://github.com/hmtheboy154/mt7902)** — Driver backport basado en los parches oficiales de MediaTek (WiFi + Bluetooth)
+- **[EdinsonMoreno](https://github.com/EdinsonMoreno/mt7902-fork)** — Fork con fixes adicionales (txpower, vif_phy NULL, kernel 6.17, hardening de seguridad)
 - **[sean.wang@mediatek.com](mailto:sean.wang@mediatek.com)** — Parches oficiales enviados a linux-wireless (Feb 2026)
 - **[checkitsnow](https://github.com/checkitsnow/MT7902_linux_drv)** — Guía de instalación y documentación
 - **Comunidad** — Testing y reportes en múltiples dispositivos
@@ -158,6 +188,7 @@ Esto elimina tanto el driver WiFi como el driver Bluetooth y sus respectivos bla
 
 - [Parches oficiales en lore.kernel.org](https://lore.kernel.org/all/20260219004007.19733-1-sean.wang@kernel.org/)
 - [Driver original (backport para 6.6+)](https://github.com/hmtheboy154/mt7902)
+- [Fork con fixes adicionales (fuente de este instalador)](https://github.com/EdinsonMoreno/mt7902-fork)
 - [Driver gen4 (Xiaomi BSP) - descontinuado](https://github.com/hmtheboy154/gen4-mt7902)
 - [Guía alternativa (checkitsnow)](https://github.com/checkitsnow/MT7902_linux_drv)
 - [Artículo CNX Software](https://www.cnx-software.com/2026/02/20/mediatek-mt7902-wireless-chipset-finally-gets-linux-drivers/)
