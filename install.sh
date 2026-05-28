@@ -287,7 +287,12 @@ unload_conflicting() {
 
 load_driver() {
   info "Cargando driver..."
-  modprobe "$MODNAME" 2>&1 || err "Fallo al cargar $MODNAME"
+  modprobe "$MODNAME" 2>>"$LOG_FILE" || {
+    warn "No se pudo cargar el módulo ahora — puede cargarse en el próximo reinicio."
+    warn "Para cargar manualmente: sudo modprobe $MODNAME"
+    warn "Si falla: sudo dkms status | grep $MODNAME"
+    return 0
+  }
   sleep 2
   log "Driver cargado exitosamente"
 }
