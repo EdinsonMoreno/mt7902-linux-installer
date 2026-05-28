@@ -50,6 +50,7 @@ Dispositivos que usan este chip:
 | RHEL 9 / Rocky / Alma | ✅ Debería funcionar |
 | Ubuntu 24.04+ | ✅ Debería funcionar |
 | Arch Linux | ✅ Debería funcionar |
+| CachyOS / Garuda / Artix / ArcoLinux | ✅ Soportado |
 | Debian 12+ | ✅ Debería funcionar |
 
 ## Instalación
