@@ -33,9 +33,25 @@ BT_BRANCH="bluetooth_backport"
 BT_MODNAME="btusb_mt7902"
 # CN-002: use mktemp for unpredictable temp dirs — prevents TOCTOU/symlink attacks as root
 BT_DIR=$(mktemp -d -t mt7902-bt.XXXXXX)
-trap 'rm -rf "$DRIVER_DIR" "$BT_DIR"' EXIT
 BLACKLIST_BT_FILE="/etc/modprobe.d/mt7902-bt-blacklist.conf"
 INSTALL_BT=1  # default: instalar BT
+
+LOG_FILE="/tmp/mt7902-install-$(date +%Y%m%d-%H%M%S).log"
+# Redirigir stdout y stderr al log mientras se mantiene output en pantalla
+exec > >(tee -a "$LOG_FILE") 2>&1
+info "Log completo guardado en: $LOG_FILE"
+
+cleanup() {
+  local exit_code=$?
+  rm -rf "$DRIVER_DIR" "$BT_DIR" 2>/dev/null || true
+  if [ $exit_code -ne 0 ]; then
+    echo ""
+    echo -e "\033[0;31m[✗] La instalación falló (código: $exit_code)\033[0m"
+    echo -e "\033[1;33m[!] Log completo: $LOG_FILE\033[0m"
+    echo -e "\033[1;33m[!] Reportar en: https://github.com/EdinsonMoreno/mt7902-linux-installer/issues\033[0m"
+  fi
+}
+trap cleanup EXIT
 
 detect_distro() {
   if [ -f /etc/os-release ]; then
@@ -81,23 +97,35 @@ check_secureboot() {
 
 install_deps_fedora() {
   # CN-027: drop | tail -1 so pipefail catches errors
-  dnf install -y git gcc make kernel-devel-"$KVER" patch 2>/dev/null \
-    || err "Falló dnf install de dependencias"
+  dnf install -y git gcc make kernel-devel-"$KVER" patch 2>>"$LOG_FILE" \
+    || err "Falló la instalación de dependencias.
+  Causa probable: repositorios desactualizados o sin conexión.
+  Diagnóstico: sudo dnf install -y gcc make kernel-devel-$(uname -r)
+  Log completo: $LOG_FILE"
 }
 install_deps_rhel() {
   # CN-027: drop | tail -1 so pipefail catches errors
-  dnf install -y git gcc make kernel-devel-"$KVER" patch 2>/dev/null \
-    || err "Falló dnf install de dependencias"
+  dnf install -y git gcc make kernel-devel-"$KVER" patch 2>>"$LOG_FILE" \
+    || err "Falló la instalación de dependencias.
+  Causa probable: repositorios desactualizados o sin conexión.
+  Diagnóstico: sudo dnf install -y gcc make kernel-devel-$(uname -r)
+  Log completo: $LOG_FILE"
 }
 install_deps_ubuntu() {
   # CN-027: drop | tail -1 so pipefail catches errors
-  apt-get update -qq && apt-get install -y git gcc make linux-headers-"$KVER" patch 2>/dev/null \
-    || err "Falló apt-get install de dependencias"
+  apt-get update -qq && apt-get install -y git gcc make linux-headers-"$KVER" patch 2>>"$LOG_FILE" \
+    || err "Falló la instalación de dependencias.
+  Causa probable: repositorios desactualizados o sin conexión.
+  Diagnóstico: sudo apt-get install -y gcc make linux-headers-$(uname -r)
+  Log completo: $LOG_FILE"
 }
 install_deps_arch() {
   # CN-027: drop | tail -1 so pipefail catches errors
-  pacman -Sy --noconfirm git gcc make linux-headers patch 2>/dev/null \
-    || err "Falló pacman install de dependencias"
+  pacman -Sy --noconfirm git gcc make linux-headers patch 2>>"$LOG_FILE" \
+    || err "Falló la instalación de dependencias.
+  Causa probable: repositorios desactualizados o sin conexión.
+  Diagnóstico: sudo pacman -Sy git gcc make linux-headers
+  Log completo: $LOG_FILE"
 }
 
 install_deps() {
@@ -116,8 +144,11 @@ download_driver() {
   info "Descargando driver MT7902..."
   rm -rf "$DRIVER_DIR"
   # CN-027: drop | tail -1 so pipefail catches errors; CN-001(partial): print commit SHA
-  git clone --depth=1 --branch "$DRIVER_BRANCH" "$DRIVER_REPO" "$DRIVER_DIR" 2>/dev/null \
-    || { err "Falló git clone de $DRIVER_REPO (rama $DRIVER_BRANCH)"; }
+  git clone --depth=1 --branch "$DRIVER_BRANCH" "$DRIVER_REPO" "$DRIVER_DIR" 2>>"$LOG_FILE" \
+    || err "No se pudo descargar el driver.
+  Causa probable: sin conexión a internet o repo no disponible.
+  Verificá: curl -I https://github.com
+  Log completo: $LOG_FILE"
   DRIVER_COMMIT=$(git -C "$DRIVER_DIR" rev-parse HEAD)
   warn "Commit del driver clonado: $DRIVER_COMMIT"
   warn "Verificá en https://github.com/EdinsonMoreno/mt7902-fork/commit/$DRIVER_COMMIT que este commit es de confianza."
@@ -127,7 +158,11 @@ download_driver() {
 compile_driver() {
   info "Compilando driver (esto puede tomar minutos)..."
   # CN-009: subshell preserves CWD; CN-027: drop | tail -1 so pipefail works
-  ( cd "$DRIVER_DIR" && make -j"$(nproc)" ) || err "Falló la compilación del driver. Ejecutá 'make' manualmente en $DRIVER_DIR para ver el error."
+  ( cd "$DRIVER_DIR" && make -j"$(nproc)" 2>>"$LOG_FILE" ) || err "Falló la compilación del driver.
+  Causa probable: kernel headers faltantes o versión incompatible.
+  Diagnóstico: ls /usr/src/kernels/$(uname -r) || sudo dnf install kernel-devel-$(uname -r)
+  Para ver el error completo: make -C $DRIVER_DIR
+  Log completo: $LOG_FILE"
   if [ ! -f "$DRIVER_DIR/mt7902e.ko" ]; then
     err "Compilación falló — revisá los errores arriba"
   fi
@@ -179,14 +214,24 @@ rebuild_initramfs() {
     dracut -f --add-drivers "$MODNAME" \
       --include "$BLACKLIST_FILE" "$BLACKLIST_FILE" \
       --include "$LOAD_FILE" "$LOAD_FILE" \
-      /boot/initramfs-"$KVER".img "$KVER" 2>/dev/null \
-      || err "Falló dracut al reconstruir initramfs"
+      /boot/initramfs-"$KVER".img "$KVER" 2>>"$LOG_FILE" \
+      || err "Falló la reconstrucción del initramfs.
+  Causa probable: espacio insuficiente en /boot o configuración inválida.
+  Diagnóstico: df -h /boot && sudo dracut -f -v --kver $(uname -r) 2>&1 | tail -20
+  El driver está instalado — podés reiniciar igual pero sin garantía de carga automática.
+  Log completo: $LOG_FILE"
   elif command -v update-initramfs &>/dev/null; then
-    update-initramfs -u -k "$KVER" 2>/dev/null \
-      || err "Falló update-initramfs"
+    update-initramfs -u -k "$KVER" 2>>"$LOG_FILE" \
+      || err "Falló la reconstrucción del initramfs (update-initramfs).
+  Causa probable: espacio insuficiente en /boot o configuración inválida.
+  Diagnóstico: df -h /boot && sudo update-initramfs -u -k $(uname -r) -v 2>&1 | tail -20
+  Log completo: $LOG_FILE"
   elif command -v mkinitcpio &>/dev/null; then
-    mkinitcpio -g /boot/initramfs-"$KVER".img 2>/dev/null \
-      || err "Falló mkinitcpio"
+    mkinitcpio -g /boot/initramfs-"$KVER".img 2>>"$LOG_FILE" \
+      || err "Falló la reconstrucción del initramfs (mkinitcpio).
+  Causa probable: espacio insuficiente en /boot o configuración inválida.
+  Diagnóstico: df -h /boot && sudo mkinitcpio -v -g /boot/initramfs-$(uname -r).img 2>&1 | tail -20
+  Log completo: $LOG_FILE"
   else
     warn "No se pudo reconstruir initramfs automáticamente. Hacelo manual."
   fi
@@ -213,12 +258,22 @@ CLEAN="make clean KVER=\$kernelver"
 BUILT_MODULE_LOCATION="."
 EOF
   # CN-027: drop | tail -1 so pipefail catches errors in dkms operations
-  dkms add -m "$MODNAME" -v 1.0 2>/dev/null \
-    || err "Falló dkms add"
-  dkms build -m "$MODNAME" -v 1.0 2>/dev/null \
-    || err "Falló dkms build. Revisá los logs en /var/lib/dkms/$MODNAME/1.0/build/"
-  dkms install -m "$MODNAME" -v 1.0 2>/dev/null \
-    || err "Falló dkms install"
+  dkms add -m "$MODNAME" -v 1.0 2>>"$LOG_FILE" \
+    || err "Falló dkms add.
+  Log completo: $LOG_FILE"
+  dkms build -m "$MODNAME" -v 1.0 2>>"$LOG_FILE" || {
+    warn "Falló dkms build — limpiando entrada DKMS..."
+    dkms remove "$MODNAME/1.0" --all 2>/dev/null || true
+    err "Falló dkms build.
+  Diagnóstico: cat /var/lib/dkms/$MODNAME/1.0/build/make.log | tail -30
+  Log completo: $LOG_FILE"
+  }
+  dkms install -m "$MODNAME" -v 1.0 2>>"$LOG_FILE" || {
+    warn "Falló dkms install — limpiando entrada DKMS..."
+    dkms remove "$MODNAME/1.0" --all 2>/dev/null || true
+    err "Falló dkms install.
+  Log completo: $LOG_FILE"
+  }
   log "DKMS registrado: $MODNAME/1.0"
 }
 
@@ -239,9 +294,21 @@ load_driver() {
 
 verify_driver() {
   info "Verificando instalación..."
-  if ! lsmod | grep -q "$MODNAME"; then
-    err "Módulo $MODNAME no cargado"
+
+  # Intentar cargar el módulo si no está cargado (puede ocurrir post-DKMS)
+  if ! lsmod | grep -q "^$MODNAME"; then
+    modprobe "$MODNAME" 2>>"$LOG_FILE" || true
+    sleep 2
   fi
+
+  if lsmod | grep -q "^$MODNAME"; then
+    log "Módulo $MODNAME cargado correctamente"
+  else
+    warn "El módulo no se cargó automáticamente."
+    warn "Intentá manualmente: sudo modprobe $MODNAME"
+    warn "Si falla, revisá: sudo dkms status && $LOG_FILE"
+  fi
+
   local pci_slot
   pci_slot=$(lspci -d 14c3:7902 | awk '{print $1}' | head -1)
   if [ -z "$pci_slot" ]; then
@@ -254,12 +321,15 @@ verify_driver() {
       log "Driver asociado al hardware"
     fi
   fi
-  if iw dev 2>/dev/null | grep -q "Interface"; then
-    local iface
-    iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}')
-    log "Interfaz inalámbrica detectada: $iface"
+
+  # Verificar interfaz WiFi
+  local iface
+  iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | head -1)
+  if [ -n "$iface" ]; then
+    log "Interfaz WiFi detectada: $iface"
   else
-    warn "No se detectó interfaz inalámbrica — revisá dmesg"
+    warn "No se detectó interfaz WiFi. Puede necesitar reinicio."
+    warn "Después de reiniciar verificá: iw dev"
   fi
 }
 
@@ -374,11 +444,6 @@ EOF
   log "=== Bluetooth instalado ==="
 }
 
-cleanup() {
-  # CN-002: DRIVER_DIR and BT_DIR are cleaned up by the trap registered at startup
-  log "Archivos temporales serán eliminados al salir (trap EXIT)"
-}
-
 usage() {
   cat << EOF
 Uso: sudo bash install.sh [opciones]
@@ -449,7 +514,6 @@ main() {
   [ "$INITRAMFS" -eq 1 ] && rebuild_initramfs
   install_bluetooth
   verify_driver
-  cleanup
 
   echo ""
   log "Instalación completada exitosamente."
