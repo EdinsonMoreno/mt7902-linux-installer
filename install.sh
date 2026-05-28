@@ -38,7 +38,7 @@ detect_distro() {
   else
     err "No se pudo detectar la distribución"
   fi
-  log "Distro detectada: $DISTRO $VERSION_ID"
+  log "Distro detectada: $DISTRO ${VERSION_ID:-}"
 }
 
 check_kernel() {
@@ -89,7 +89,7 @@ install_deps() {
     fedora) install_deps_fedora ;;
     rhel|centos|rocky|alma) install_deps_rhel ;;
     ubuntu|debian|pop|mint) install_deps_ubuntu ;;
-    arch|manjaro|endeavouros) install_deps_arch ;;
+    arch|manjaro|endeavouros|cachyos|garuda|artix|arcolinux) install_deps_arch ;;
     *) err "Distro no soportada: $DISTRO. Instalá gcc, make y kernel-devel manualmente." ;;
   esac
   log "Dependencias instaladas"
@@ -255,7 +255,7 @@ install_bluetooth() {
     case "$DISTRO" in
       fedora|rhel|centos|rocky|alma) dnf install -y linux-firmware ;;
       ubuntu|debian|pop|mint) apt-get install -y linux-firmware ;;
-      arch|manjaro|endeavouros) pacman -Sy --noconfirm linux-firmware ;;
+      arch|manjaro|endeavouros|cachyos|garuda|artix|arcolinux) pacman -Sy --noconfirm linux-firmware ;;
     esac
   fi
 
