@@ -3,7 +3,7 @@ set -euo pipefail
 
 # mt7902-linux-installer
 # Automated installer for MediaTek MT7902 WiFi + Bluetooth driver on Linux (kernel 6.6+)
-# Driver source: https://github.com/hmtheboy154/mt7902
+# Driver source: https://github.com/EdinsonMoreno/mt7902-fork (backport branch)
 # Official patches (Linux 7.1+): https://lore.kernel.org/all/20260219004007.19733-1-sean.wang@kernel.org/
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -19,7 +19,8 @@ KVER="$(uname -r)"
 # CN-024: validate architecture is x86_64 before proceeding
 [ "$ARCH" = "x86_64" ] || { echo -e "\033[0;31m[✗]\033[0m Arquitectura no soportada: $ARCH. Solo x86_64."; exit 1; }
 DISTRO=""
-DRIVER_REPO="https://github.com/hmtheboy154/mt7902.git"
+DRIVER_REPO="https://github.com/EdinsonMoreno/mt7902-fork.git"
+DRIVER_BRANCH="backport"
 # CN-002: use mktemp for unpredictable temp dirs — prevents TOCTOU/symlink attacks as root
 DRIVER_DIR=$(mktemp -d -t mt7902-src.XXXXXX)
 MODNAME="mt7902e"
@@ -115,11 +116,11 @@ download_driver() {
   info "Descargando driver MT7902..."
   rm -rf "$DRIVER_DIR"
   # CN-027: drop | tail -1 so pipefail catches errors; CN-001(partial): print commit SHA
-  git clone --depth=1 "$DRIVER_REPO" "$DRIVER_DIR" 2>/dev/null \
-    || { err "Falló git clone de $DRIVER_REPO"; }
+  git clone --depth=1 --branch "$DRIVER_BRANCH" "$DRIVER_REPO" "$DRIVER_DIR" 2>/dev/null \
+    || { err "Falló git clone de $DRIVER_REPO (rama $DRIVER_BRANCH)"; }
   DRIVER_COMMIT=$(git -C "$DRIVER_DIR" rev-parse HEAD)
   warn "Commit del driver clonado: $DRIVER_COMMIT"
-  warn "Verificá en https://github.com/hmtheboy154/mt7902/commit/$DRIVER_COMMIT que este commit es de confianza."
+  warn "Verificá en https://github.com/EdinsonMoreno/mt7902-fork/commit/$DRIVER_COMMIT que este commit es de confianza."
   log "Driver descargado"
 }
 
@@ -426,7 +427,7 @@ main() {
 
   echo -e "${CYAN}============================================${NC}"
   echo -e "${CYAN}  MediaTek MT7902 Linux Driver Installer${NC}"
-  echo -e "${CYAN}  Driver: hmtheboy154/mt7902 (backport)${NC}"
+  echo -e "${CYAN}  Driver: EdinsonMoreno/mt7902-fork (backport)${NC}"
   echo -e "${CYAN}  Kernel target: 6.6+${NC}"
   echo -e "${CYAN}============================================${NC}"
   echo ""
